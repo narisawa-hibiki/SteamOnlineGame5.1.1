@@ -1,21 +1,24 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
-
 #include "Menu.h"
 #include "Components/Button.h"
 #include "MultiplayerSessionsSubsystem.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
 
-void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FString LobbyPath)
+	void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FString LobbyPath)
 {
+	// ロビーパスに?listenパラメータを追加してサーバーモードを指定
 	PathToLobby = FString::Printf(TEXT("%s?listen"), *LobbyPath);
 	NumPublicConnections = NumberOfPublicConnections;
 	MatchType = TypeOfMatch;
+	
+	// メニューをビューポートに追加して表示
 	AddToViewport();
 	SetVisibility(ESlateVisibility::Visible);
 	bIsFocusable = true;
 
+	// プレイヤーコントローラーの入力モードをUI専用に設定
 	UWorld* World = GetWorld();
 	if (World)
 	{
@@ -30,12 +33,14 @@ void UMenu::MenuSetup(int32 NumberOfPublicConnections, FString TypeOfMatch, FStr
 		}
 	}
 
+	// マルチプレイヤーセッションサブシステムの取得
 	UGameInstance* GameInstance = GetGameInstance();
 	if (GameInstance)
 	{
 		MultiplayerSessionsSubsystem = GameInstance->GetSubsystem<UMultiplayerSessionsSubsystem>();
 	}
 
+	// サブシステムのデリゲートにコールバックをバインド
 	if (MultiplayerSessionsSubsystem)
 	{
 		MultiplayerSessionsSubsystem->MultiplayerOnCreateSessionComplete.AddDynamic(this, &ThisClass::OnCreateSession);
@@ -53,10 +58,13 @@ bool UMenu::Initialize()
 		return false;
 	}
 
+	// ホストボタンのクリックイベントをバインド
 	if (HostButton)
 	{
 		HostButton->OnClicked.AddDynamic(this, &ThisClass::HostButtonClicked);
 	}
+	
+	// 参加ボタンのクリックイベントをバインド
 	if (JoinButton)
 	{
 		JoinButton->OnClicked.AddDynamic(this, &ThisClass::JoinButtonClicked);
@@ -65,13 +73,6 @@ bool UMenu::Initialize()
 	return true;
 }
 
-/*
-void UMenu::OnLevelRemovedFromWorld(ULevel* InLevel, UWorld* InWorld)
-{
-	MenuTearDown();
-	Super::OnLevelRemovedFromWorld(InLevel, InWorld);
-}
-*/
 void UMenu::NativeDestruct()
 {
 	MenuTearDown();
@@ -82,6 +83,7 @@ void UMenu::OnCreateSession(bool bWasSuccessful)
 {
 	if (bWasSuccessful)
 	{
+		// セッション作成成功時、サーバーとしてロビーへ移動
 		UWorld* World = GetWorld();
 		if (World)
 		{
@@ -90,6 +92,7 @@ void UMenu::OnCreateSession(bool bWasSuccessful)
 	}
 	else
 	{
+		// セッション作成失敗時、エラーメッセージを表示してホストボタンを再有効化
 		if (GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(
@@ -110,16 +113,20 @@ void UMenu::OnFindSessions(const TArray<FOnlineSessionSearchResult>& SessionResu
 		return;
 	}
 
+	// 検索結果をループしてマッチタイプが一致するセッションを探す
 	for (auto Result : SessionResults)
 	{
 		FString SettingsValue;
 		Result.Session.SessionSettings.Get(FName("MatchType"), SettingsValue);
 		if (SettingsValue == MatchType)
 		{
+			// マッチタイプが一致したセッションに参加
 			MultiplayerSessionsSubsystem->JoinSession(Result);
 			return;
 		}
 	}
+	
+	// 検索失敗または結果が0件の場合、参加ボタンを再有効化
 	if (!bWasSuccessful || SessionResults.Num() == 0)
 	{
 		JoinButton->SetIsEnabled(true);
@@ -128,15 +135,18 @@ void UMenu::OnFindSessions(const TArray<FOnlineSessionSearchResult>& SessionResu
 
 void UMenu::OnJoinSession(EOnJoinSessionCompleteResult::Type Result)
 {
+	// オンラインサブシステムからセッションインターフェースを取得
 	IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
 	if (Subsystem)
 	{
 		IOnlineSessionPtr SessionInterface = Subsystem->GetSessionInterface();
 		if (SessionInterface.IsValid())
 		{
+			// セッションの接続先アドレスを取得
 			FString Address;
 			SessionInterface->GetResolvedConnectString(NAME_GameSession, Address);
 
+			// クライアントとしてセッションに接続
 			APlayerController* PlayerController = GetGameInstance()->GetFirstLocalPlayerController();
 			if (PlayerController)
 			{
@@ -168,13 +178,17 @@ void UMenu::JoinButtonClicked()
 	JoinButton->SetIsEnabled(false);
 	if (MultiplayerSessionsSubsystem)
 	{
+		// 最大10000件のセッションを検索
 		MultiplayerSessionsSubsystem->FindSessions(10000);
 	}
 }
 
 void UMenu::MenuTearDown()
 {
+	// メニューをビューポートから削除
 	RemoveFromParent();
+	
+	// 入力モードをゲームプレイモードに戻し、マウスカーソルを非表示に
 	UWorld* World = GetWorld();
 	if (World)
 	{

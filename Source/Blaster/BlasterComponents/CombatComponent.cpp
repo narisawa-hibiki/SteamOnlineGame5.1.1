@@ -1,6 +1,5 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
-
 #include "CombatComponent.h"
 #include "Blaster/Weapon/Weapon.h"
 #include "Blaster/Character/BlasterCharacter.h"
@@ -50,11 +49,13 @@ void UCombatComponent::ShotgunShellReload()
 
 void UCombatComponent::PickupAmmo(EWeaponType WeaponType, int32 AmmoAmount)
 {
+	// 所持弾薬マップに武器タイプが存在すれば弾薬を追加
 	if (CarriedAmmoMap.Contains(WeaponType))
 	{
 		CarriedAmmoMap[WeaponType] = FMath::Clamp(CarriedAmmoMap[WeaponType] + AmmoAmount, 0, MaxCarriedAmmo);
 		UpdateCarriedAmmo();
 	}
+	// 装備中の武器が空で同じ武器タイプならリロード
 	if (EquippedWeapon && EquippedWeapon->IsEmpty() && EquippedWeapon->GetWeaponType() == WeaponType)
 	{
 		Reload();
@@ -69,11 +70,13 @@ void UCombatComponent::BeginPlay()
 	{
 		Character->GetCharacterMovement()->MaxWalkSpeed = BaseWalkSpeed;
 
+		// デフォルトFOVを設定
 		if (Character->GetFollowCamera())
 		{
 			DefaultFOV = Character->GetFollowCamera()->FieldOfView;
 			CurrentFOV = DefaultFOV;
 		}
+		// サーバーのみで所持弾薬を初期化
 		if (Character->HasAuthority())
 		{
 			InitializeCarriedAmmo();
@@ -85,12 +88,15 @@ void UCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	// ローカルで制御されているキャラクターのみ実行
 	if (Character && Character->IsLocallyControlled())
 	{
+		// クロスヘア下のトレースを実行
 		FHitResult HitResult;
 		TraceUnderCrosshairs(HitResult);
 		HitTarget = HitResult.ImpactPoint;
 
+		// HUDとFOVを更新
 		SetHUDCrosshairs(DeltaTime);
 		InterpFOV(DeltaTime);
 	}
@@ -114,6 +120,7 @@ void UCombatComponent::Fire()
 		{
 			CrosshairShootingFactor = .75f;
 
+			// 武器タイプに応じて適切な射撃関数を呼び出す
 			switch (EquippedWeapon->FireType)
 			{
 			case EFireType::EFT_Projectile:
@@ -135,8 +142,11 @@ void UCombatComponent::FireProjectileWeapon()
 {
 	if (EquippedWeapon && Character)
 	{
+		// スキャッターを使用する場合はヒット位置を散乱
 		HitTarget = EquippedWeapon->bUseScatter ? EquippedWeapon->TraceEndWithScatter(HitTarget) : HitTarget;
+		// ローカルクライアントで射撃エフェクトを再生
 		if (!Character->HasAuthority()) LocalFire(HitTarget);
+		// サーバーで射撃を実行
 		ServerFire(HitTarget, EquippedWeapon->FireDelay);
 	}
 }
@@ -145,8 +155,11 @@ void UCombatComponent::FireHitScanWeapon()
 {
 	if (EquippedWeapon && Character)
 	{
+		// スキャッターを使用する場合はヒット位置を散乱
 		HitTarget = EquippedWeapon->bUseScatter ? EquippedWeapon->TraceEndWithScatter(HitTarget) : HitTarget;
+		// ローカルクライアントで射撃エフェクトを再生
 		if (!Character->HasAuthority()) LocalFire(HitTarget);
+		// サーバーで射撃を実行
 		ServerFire(HitTarget, EquippedWeapon->FireDelay);
 	}
 }
@@ -156,9 +169,12 @@ void UCombatComponent::FireShotgun()
 	AShotgun* Shotgun = Cast<AShotgun>(EquippedWeapon);
 	if (Shotgun && Character)
 	{
+		// 各ペレットのヒット位置を計算
 		TArray<FVector_NetQuantize> HitTargets;
 		Shotgun->ShotgunTraceEndWithScatter(HitTarget, HitTargets);
+		// ローカルクライアントで射撃エフェクトを再生
 		if (!Character->HasAuthority()) ShotgunLocalFire(HitTargets);
+		// サーバーで射撃を実行
 		ServerShotgunFire(HitTargets, EquippedWeapon->FireDelay);
 	}
 }
@@ -166,6 +182,7 @@ void UCombatComponent::FireShotgun()
 void UCombatComponent::StartFireTimer()
 {
 	if (EquippedWeapon == nullptr || Character == nullptr) return;
+	// 射撃間隔タイマーを設定
 	Character->GetWorldTimerManager().SetTimer(
 		FireTimer,
 		this,
@@ -178,10 +195,12 @@ void UCombatComponent::FireTimerFinished()
 {
 	if (EquippedWeapon == nullptr) return;
 	bCanFire = true;
+	// フルオート武器で射撃ボタンが押されていれば連射
 	if (bFireButtonPressed && EquippedWeapon->bAutomatic)
 	{
 		Fire();
 	}
+	// 弾薬が空ならリロード
 	ReloadEmptyWeapon();
 }
 
@@ -192,6 +211,7 @@ void UCombatComponent::ServerFire_Implementation(const FVector_NetQuantize& Trac
 
 bool UCombatComponent::ServerFire_Validate(const FVector_NetQuantize& TraceHitTarget, float FireDelay)
 {
+	// 射撃遅延が武器の設定値と一致するかチェック（チート防止）
 	if (EquippedWeapon)
 	{
 		bool bNearlyEqual = FMath::IsNearlyEqual(EquippedWeapon->FireDelay, FireDelay, 0.001f);
@@ -202,6 +222,7 @@ bool UCombatComponent::ServerFire_Validate(const FVector_NetQuantize& TraceHitTa
 
 void UCombatComponent::MulticastFire_Implementation(const FVector_NetQuantize& TraceHitTarget)
 {
+	// ローカルクライアントは既に実行済みなのでスキップ
 	if (Character && Character->IsLocallyControlled() && !Character->HasAuthority()) return;
 	LocalFire(TraceHitTarget);
 }
@@ -213,6 +234,7 @@ void UCombatComponent::ServerShotgunFire_Implementation(const TArray<FVector_Net
 
 bool UCombatComponent::ServerShotgunFire_Validate(const TArray<FVector_NetQuantize>& TraceHitTargets, float FireDelay)
 {
+	// 射撃遅延が武器の設定値と一致するかチェック（チート防止）
 	if (EquippedWeapon)
 	{
 		bool bNearlyEqual = FMath::IsNearlyEqual(EquippedWeapon->FireDelay, FireDelay, 0.001f);
@@ -223,6 +245,7 @@ bool UCombatComponent::ServerShotgunFire_Validate(const TArray<FVector_NetQuanti
 
 void UCombatComponent::MulticastShotgunFire_Implementation(const TArray<FVector_NetQuantize>& TraceHitTargets)
 {
+	// ローカルクライアントは既に実行済みなのでスキップ
 	if (Character && Character->IsLocallyControlled() && !Character->HasAuthority()) return;
 	ShotgunLocalFire(TraceHitTargets);
 }
@@ -232,7 +255,9 @@ void UCombatComponent::LocalFire(const FVector_NetQuantize& TraceHitTarget)
 	if (EquippedWeapon == nullptr) return;
 	if (Character && CombatState == ECombatState::ECS_Unoccupied)
 	{
+		// 射撃アニメーションを再生
 		Character->PlayFireMontage(bAiming);
+		// 武器の射撃処理を実行
 		EquippedWeapon->Fire(TraceHitTarget);
 	}
 }
@@ -241,10 +266,13 @@ void UCombatComponent::ShotgunLocalFire(const TArray<FVector_NetQuantize>& Trace
 {
 	AShotgun* Shotgun = Cast<AShotgun>(EquippedWeapon);
 	if (Shotgun == nullptr || Character == nullptr) return;
+	// リロード中または待機中の場合のみ射撃可能
 	if (CombatState == ECombatState::ECS_Reloading || CombatState == ECombatState::ECS_Unoccupied)
 	{
 		bLocallyReloading = false;
+		// 射撃アニメーションを再生
 		Character->PlayFireMontage(bAiming);
+		// ショットガンの射撃処理を実行
 		Shotgun->FireShotgun(TraceHitTargets);
 		CombatState = ECombatState::ECS_Unoccupied;
 	}
@@ -255,6 +283,7 @@ void UCombatComponent::EquipWeapon(AWeapon* WeaponToEquip)
 	if (Character == nullptr || WeaponToEquip == nullptr) return;
 	if (CombatState != ECombatState::ECS_Unoccupied) return;
 
+	// フラグの場合は特別な処理
 	if (WeaponToEquip->GetWeaponType() == EWeaponType::EWT_Flag)
 	{
 		Character->Crouch();
@@ -266,6 +295,7 @@ void UCombatComponent::EquipWeapon(AWeapon* WeaponToEquip)
 	}
 	else
 	{
+		// プライマリ武器が装備済みでセカンダリが未装備ならセカンダリに装備
 		if (EquippedWeapon != nullptr && SecondaryWeapon == nullptr)
 		{
 			EquipSecondaryWeapon(WeaponToEquip);
@@ -275,6 +305,7 @@ void UCombatComponent::EquipWeapon(AWeapon* WeaponToEquip)
 			EquipPrimaryWeapon(WeaponToEquip);
 		}
 
+		// キャラクターの回転を制御
 		Character->GetCharacterMovement()->bOrientRotationToMovement = false;
 		Character->bUseControllerRotationYaw = true;
 	}
@@ -284,6 +315,7 @@ void UCombatComponent::SwapWeapons()
 {
 	if (CombatState != ECombatState::ECS_Unoccupied || Character == nullptr || !Character->HasAuthority()) return;
 
+	// 武器交換アニメーションを再生
 	Character->PlaySwapMontage();
 	CombatState = ECombatState::ECS_SwappingWeapons;
 	Character->bFinishedSwapping = false;
@@ -293,9 +325,11 @@ void UCombatComponent::SwapWeapons()
 void UCombatComponent::EquipPrimaryWeapon(AWeapon* WeaponToEquip)
 {
 	if (WeaponToEquip == nullptr) return;
+	// 現在装備中の武器をドロップ
 	DropEquippedWeapon();
 	EquippedWeapon = WeaponToEquip;
 	EquippedWeapon->SetWeaponState(EWeaponState::EWS_Equipped);
+	// 右手にアタッチ
 	AttachActorToRightHand(EquippedWeapon);
 	EquippedWeapon->SetOwner(Character);
 	EquippedWeapon->SetHUDAmmo();
@@ -309,6 +343,7 @@ void UCombatComponent::EquipSecondaryWeapon(AWeapon* WeaponToEquip)
 	if (WeaponToEquip == nullptr) return;
 	SecondaryWeapon = WeaponToEquip;
 	SecondaryWeapon->SetWeaponState(EWeaponState::EWS_EquippedSecondary);
+	// バックパックにアタッチ
 	AttachActorToBackpack(WeaponToEquip);
 	PlayEquipWeaponSound(WeaponToEquip);
 	SecondaryWeapon->SetOwner(Character);
@@ -333,6 +368,7 @@ void UCombatComponent::DropEquippedWeapon()
 void UCombatComponent::AttachActorToRightHand(AActor* ActorToAttach)
 {
 	if (Character == nullptr || Character->GetMesh() == nullptr || ActorToAttach == nullptr) return;
+	// 右手ソケットにアタッチ
 	const USkeletalMeshSocket* HandSocket = Character->GetMesh()->GetSocketByName(FName("RightHandSocket"));
 	if (HandSocket)
 	{
@@ -343,6 +379,7 @@ void UCombatComponent::AttachActorToRightHand(AActor* ActorToAttach)
 void UCombatComponent::AttachFlagToLeftHand(AWeapon* Flag)
 {
 	if (Character == nullptr || Character->GetMesh() == nullptr || Flag == nullptr) return;
+	// フラグソケットにアタッチ
 	const USkeletalMeshSocket* HandSocket = Character->GetMesh()->GetSocketByName(FName("FlagSocket"));
 	if (HandSocket)
 	{
@@ -353,6 +390,7 @@ void UCombatComponent::AttachFlagToLeftHand(AWeapon* Flag)
 void UCombatComponent::AttachActorToLeftHand(AActor* ActorToAttach)
 {
 	if (Character == nullptr || Character->GetMesh() == nullptr || ActorToAttach == nullptr || EquippedWeapon == nullptr) return;
+	// ピストル/SMGは専用ソケット、それ以外は左手ソケット
 	bool bUsePistolSocket = 
 		EquippedWeapon->GetWeaponType() == EWeaponType::EWT_Pistol ||
 		EquippedWeapon->GetWeaponType() == EWeaponType::EWT_SubmachineGun;
@@ -367,6 +405,7 @@ void UCombatComponent::AttachActorToLeftHand(AActor* ActorToAttach)
 void UCombatComponent::AttachActorToBackpack(AActor* ActorToAttach)
 {
 	if (Character == nullptr || Character->GetMesh() == nullptr || ActorToAttach == nullptr) return;
+	// バックパックソケットにアタッチ
 	const USkeletalMeshSocket* BackpackSocket = Character->GetMesh()->GetSocketByName(FName("BackpackSocket"));
 	if (BackpackSocket)
 	{
@@ -377,11 +416,13 @@ void UCombatComponent::AttachActorToBackpack(AActor* ActorToAttach)
 void UCombatComponent::UpdateCarriedAmmo()
 {
 	if (EquippedWeapon == nullptr) return;
+	// 装備中の武器タイプの所持弾薬を取得
 	if (CarriedAmmoMap.Contains(EquippedWeapon->GetWeaponType()))
 	{
 		CarriedAmmo = CarriedAmmoMap[EquippedWeapon->GetWeaponType()];
 	}
 
+	// HUDを更新
 	Controller = Controller == nullptr ? Cast<ABlasterPlayerController>(Character->Controller) : Controller;
 	if (Controller)
 	{
@@ -411,6 +452,7 @@ void UCombatComponent::ReloadEmptyWeapon()
 
 void UCombatComponent::Reload()
 {
+	// リロード可能な条件をチェック
 	if (CarriedAmmo > 0 && CombatState == ECombatState::ECS_Unoccupied && EquippedWeapon && !EquippedWeapon->IsFull() && !bLocallyReloading)
 	{
 		ServerReload();
@@ -424,6 +466,7 @@ void UCombatComponent::ServerReload_Implementation()
 	if (Character == nullptr || EquippedWeapon == nullptr) return;
 
 	CombatState = ECombatState::ECS_Reloading;
+	// ローカルクライアント以外でリロード処理を実行
 	if (!Character->IsLocallyControlled()) HandleReload();
 }
 
@@ -431,11 +474,13 @@ void UCombatComponent::FinishReloading()
 {
 	if (Character == nullptr) return;
 	bLocallyReloading = false;
+	// サーバーで弾薬を更新
 	if (Character->HasAuthority())
 	{
 		CombatState = ECombatState::ECS_Unoccupied;
 		UpdateAmmoValues();
 	}
+	// 射撃ボタンが押されていれば即座に射撃
 	if (bFireButtonPressed)
 	{
 		Fire();
@@ -457,15 +502,18 @@ void UCombatComponent::FinishSwapAttachWeapons()
 	PlayEquipWeaponSound(SecondaryWeapon);
 
 	if (Character == nullptr || !Character->HasAuthority()) return;
+	// プライマリとセカンダリを入れ替え
 	AWeapon* TempWeapon = EquippedWeapon;
 	EquippedWeapon = SecondaryWeapon;
 	SecondaryWeapon = TempWeapon;
 
+	// 新しいプライマリ武器を右手にアタッチ
 	EquippedWeapon->SetWeaponState(EWeaponState::EWS_Equipped);
 	AttachActorToRightHand(EquippedWeapon);
 	EquippedWeapon->SetHUDAmmo();
 	UpdateCarriedAmmo();
 
+	// 新しいセカンダリ武器をバックパックにアタッチ
 	SecondaryWeapon->SetWeaponState(EWeaponState::EWS_EquippedSecondary);
 	AttachActorToBackpack(SecondaryWeapon);
 }
@@ -473,9 +521,11 @@ void UCombatComponent::FinishSwapAttachWeapons()
 void UCombatComponent::UpdateAmmoValues()
 {
 	if (Character == nullptr || EquippedWeapon == nullptr) return;
+	// リロードする弾薬数を計算
 	int32 ReloadAmount = AmountToReload();
 	if (CarriedAmmoMap.Contains(EquippedWeapon->GetWeaponType()))
 	{
+		// 所持弾薬から減算
 		CarriedAmmoMap[EquippedWeapon->GetWeaponType()] -= ReloadAmount;
 		CarriedAmmo = CarriedAmmoMap[EquippedWeapon->GetWeaponType()];
 	}
@@ -484,6 +534,7 @@ void UCombatComponent::UpdateAmmoValues()
 	{
 		Controller->SetHUDCarriedAmmo(CarriedAmmo);
 	}
+	// 武器の弾薬を増やす
 	EquippedWeapon->AddAmmo(ReloadAmount);
 }
 
@@ -491,6 +542,7 @@ void UCombatComponent::UpdateShotgunAmmoValues()
 {
 	if (Character == nullptr || EquippedWeapon == nullptr) return;
 
+	// 1発ずつリロード
 	if (CarriedAmmoMap.Contains(EquippedWeapon->GetWeaponType()))
 	{
 		CarriedAmmoMap[EquippedWeapon->GetWeaponType()] -= 1;
@@ -503,6 +555,7 @@ void UCombatComponent::UpdateShotgunAmmoValues()
 	}
 	EquippedWeapon->AddAmmo(1);
 	bCanFire = true;
+	// マガジンが満タンまたは所持弾薬が0ならリロード終了
 	if (EquippedWeapon->IsFull() || CarriedAmmo == 0)
 	{
 		JumpToShotgunEnd();
@@ -516,7 +569,7 @@ void UCombatComponent::OnRep_Grenades()
 
 void UCombatComponent::JumpToShotgunEnd()
 {
-	// Jump to ShotgunEnd section
+	// ショットガンリロードアニメーションの終了セクションにジャンプ
 	UAnimInstance* AnimInstance = Character->GetMesh()->GetAnimInstance();
 	if (AnimInstance && Character->GetReloadMontage())
 	{
@@ -527,12 +580,14 @@ void UCombatComponent::JumpToShotgunEnd()
 void UCombatComponent::ThrowGrenadeFinished()
 {
 	CombatState = ECombatState::ECS_Unoccupied;
+	// 武器を右手に戻す
 	AttachActorToRightHand(EquippedWeapon);
 }
 
 void UCombatComponent::LaunchGrenade()
 {
 	ShowAttachedGrenade(false);
+	// ローカルクライアントでグレネードを発射
 	if (Character && Character->IsLocallyControlled())
 	{
 		ServerLaunchGrenade(HitTarget);
@@ -543,6 +598,7 @@ void UCombatComponent::ServerLaunchGrenade_Implementation(const FVector_NetQuant
 {
 	if (Character && GrenadeClass && Character->GetAttachedGrenade())
 	{
+		// グレネードの発射位置と方向を計算
 		const FVector StartingLocation = Character->GetAttachedGrenade()->GetComponentLocation();
 		FVector ToTarget = Target - StartingLocation;
 		FActorSpawnParameters SpawnParams;
@@ -551,6 +607,7 @@ void UCombatComponent::ServerLaunchGrenade_Implementation(const FVector_NetQuant
 		UWorld* World = GetWorld();
 		if (World)
 		{
+			// グレネードをスポーン
 			World->SpawnActor<AProjectile>(
 				GrenadeClass,
 				StartingLocation,
@@ -563,6 +620,7 @@ void UCombatComponent::ServerLaunchGrenade_Implementation(const FVector_NetQuant
 
 void UCombatComponent::OnRep_CombatState()
 {
+	// 戦闘状態に応じた処理を実行
 	switch (CombatState)
 	{
 	case ECombatState::ECS_Reloading:
@@ -602,11 +660,13 @@ void UCombatComponent::HandleReload()
 int32 UCombatComponent::AmountToReload()
 {
 	if (EquippedWeapon == nullptr) return 0;
+	// マガジンの空き容量を計算
 	int32 RoomInMag = EquippedWeapon->GetMagCapacity() - EquippedWeapon->GetAmmo();
 
 	if (CarriedAmmoMap.Contains(EquippedWeapon->GetWeaponType()))
 	{
 		int32 AmountCarried = CarriedAmmoMap[EquippedWeapon->GetWeaponType()];
+		// 空き容量と所持弾薬の少ない方をリロード
 		int32 Least = FMath::Min(RoomInMag, AmountCarried);
 		return FMath::Clamp(RoomInMag, 0, Least);
 	}
@@ -620,14 +680,17 @@ void UCombatComponent::ThrowGrenade()
 	CombatState = ECombatState::ECS_ThrowingGrenade;
 	if (Character)
 	{
+		// グレネード投擲アニメーションを再生
 		Character->PlayThrowGrenadeMontage();
 		AttachActorToLeftHand(EquippedWeapon);
 		ShowAttachedGrenade(true);
 	}
+	// クライアントからサーバーに通知
 	if (Character && !Character->HasAuthority())
 	{
 		ServerThrowGrenade();
 	}
+	// サーバーでグレネード数を減らす
 	if (Character && Character->HasAuthority())
 	{
 		Grenades = FMath::Clamp(Grenades - 1, 0, MaxGrenades);
@@ -645,6 +708,7 @@ void UCombatComponent::ServerThrowGrenade_Implementation()
 		AttachActorToLeftHand(EquippedWeapon);
 		ShowAttachedGrenade(true);
 	}
+	// グレネード数を減らす
 	Grenades = FMath::Clamp(Grenades - 1, 0, MaxGrenades);
 	UpdateHUDGrenades();
 }
@@ -675,6 +739,7 @@ void UCombatComponent::OnRep_EquippedWeapon()
 {
 	if (EquippedWeapon && Character)
 	{
+		// 装備状態を設定
 		EquippedWeapon->SetWeaponState(EWeaponState::EWS_Equipped);
 		AttachActorToRightHand(EquippedWeapon);
 		Character->GetCharacterMovement()->bOrientRotationToMovement = false;
@@ -689,6 +754,7 @@ void UCombatComponent::OnRep_SecondaryWeapon()
 {
 	if (SecondaryWeapon && Character)
 	{
+		// セカンダリ武器をバックパックにアタッチ
 		SecondaryWeapon->SetWeaponState(EWeaponState::EWS_EquippedSecondary);
 		AttachActorToBackpack(SecondaryWeapon);
 		PlayEquipWeaponSound(EquippedWeapon);
@@ -697,12 +763,14 @@ void UCombatComponent::OnRep_SecondaryWeapon()
 
 void UCombatComponent::TraceUnderCrosshairs(FHitResult& TraceHitResult)
 {
+	// ビューポートサイズを取得
 	FVector2D ViewportSize;
 	if (GEngine && GEngine->GameViewport)
 	{
 		GEngine->GameViewport->GetViewportSize(ViewportSize);
 	}
 
+	// 画面中央（クロスヘア位置）を計算
 	FVector2D CrosshairLocation(ViewportSize.X / 2.f, ViewportSize.Y / 2.f);
 	FVector CrosshairWorldPosition;
 	FVector CrosshairWorldDirection;
@@ -717,6 +785,7 @@ void UCombatComponent::TraceUnderCrosshairs(FHitResult& TraceHitResult)
 	{
 		FVector Start = CrosshairWorldPosition;
 
+		// キャラクターの前方からトレースを開始
 		if (Character)
 		{
 			float DistanceToCharacter = (Character->GetActorLocation() - Start).Size();
@@ -725,12 +794,14 @@ void UCombatComponent::TraceUnderCrosshairs(FHitResult& TraceHitResult)
 
 		FVector End = Start + CrosshairWorldDirection * TRACE_LENGTH;
 
+		// トレースを実行
 		GetWorld()->LineTraceSingleByChannel(
 			TraceHitResult,
 			Start,
 			End,
 			ECollisionChannel::ECC_Visibility
 		);
+		// インタラクト可能なオブジェクトならクロスヘアを赤くする
 		if (TraceHitResult.GetActor() && TraceHitResult.GetActor()->Implements<UInteractWithCrosshairsInterface>())
 		{
 			HUDPackage.CrosshairsColor = FLinearColor::Red;
@@ -752,6 +823,7 @@ void UCombatComponent::SetHUDCrosshairs(float DeltaTime)
 		HUD = HUD == nullptr ? Cast<ABlasterHUD>(Controller->GetHUD()) : HUD;
 		if (HUD)
 		{
+			// 装備中の武器のクロスヘアを設定
 			if (EquippedWeapon)
 			{
 				HUDPackage.CrosshairsCenter = EquippedWeapon->CrosshairsCenter;
@@ -768,9 +840,10 @@ void UCombatComponent::SetHUDCrosshairs(float DeltaTime)
 				HUDPackage.CrosshairsBottom = nullptr;
 				HUDPackage.CrosshairsTop = nullptr;
 			}
-			// Calculate crosshair spread
+			
+			// クロスヘアの拡散を計算
 
-			// [0, 600] -> [0, 1]
+			// 速度による拡散 [0, 600] -> [0, 1]
 			FVector2D WalkSpeedRange(0.f, Character->GetCharacterMovement()->MaxWalkSpeed);
 			FVector2D VelocityMultiplierRange(0.f, 1.f);
 			FVector Velocity = Character->GetVelocity();
@@ -778,6 +851,7 @@ void UCombatComponent::SetHUDCrosshairs(float DeltaTime)
 
 			CrosshairVelocityFactor = FMath::GetMappedRangeValueClamped(WalkSpeedRange, VelocityMultiplierRange, Velocity.Size());
 
+			// 空中時の拡散
 			if (Character->GetCharacterMovement()->IsFalling())
 			{
 				CrosshairInAirFactor = FMath::FInterpTo(CrosshairInAirFactor, 2.25f, DeltaTime, 2.25f);
@@ -787,6 +861,7 @@ void UCombatComponent::SetHUDCrosshairs(float DeltaTime)
 				CrosshairInAirFactor = FMath::FInterpTo(CrosshairInAirFactor, 0.f, DeltaTime, 30.f);
 			}
 
+			// エイム時の縮小
 			if (bAiming)
 			{
 				CrosshairAimFactor = FMath::FInterpTo(CrosshairAimFactor, 0.58f, DeltaTime, 30.f);
@@ -796,8 +871,10 @@ void UCombatComponent::SetHUDCrosshairs(float DeltaTime)
 				CrosshairAimFactor = FMath::FInterpTo(CrosshairAimFactor, 0.f, DeltaTime, 30.f);
 			}
 
+			// 射撃時の拡散
 			CrosshairShootingFactor = FMath::FInterpTo(CrosshairShootingFactor, 0.f, DeltaTime, 40.f);
 
+			// 最終的なクロスヘア拡散を計算
 			HUDPackage.CrosshairSpread =
 				0.5f +
 				CrosshairVelocityFactor +
@@ -814,6 +891,7 @@ void UCombatComponent::InterpFOV(float DeltaTime)
 {
 	if (EquippedWeapon == nullptr) return;
 
+	// エイム時はズームFOVに補間
 	if (bAiming)
 	{
 		CurrentFOV = FMath::FInterpTo(CurrentFOV, EquippedWeapon->GetZoomedFOV(), DeltaTime, EquippedWeapon->GetZoomInterpSpeed());
@@ -822,6 +900,7 @@ void UCombatComponent::InterpFOV(float DeltaTime)
 	{
 		CurrentFOV = FMath::FInterpTo(CurrentFOV, DefaultFOV, DeltaTime, ZoomInterpSpeed);
 	}
+	// カメラのFOVを更新
 	if (Character && Character->GetFollowCamera())
 	{
 		Character->GetFollowCamera()->SetFieldOfView(CurrentFOV);
@@ -835,8 +914,10 @@ void UCombatComponent::SetAiming(bool bIsAiming)
 	ServerSetAiming(bIsAiming);
 	if (Character)
 	{
+		// エイム時は移動速度を下げる
 		Character->GetCharacterMovement()->MaxWalkSpeed = bIsAiming ? AimWalkSpeed : BaseWalkSpeed;
 	}
+	// スナイパーライフルならスコープを表示
 	if (Character->IsLocallyControlled() && EquippedWeapon->GetWeaponType() == EWeaponType::EWT_SniperRifle)
 	{
 		Character->ShowSniperScopeWidget(bIsAiming);
@@ -855,45 +936,4 @@ void UCombatComponent::ServerSetAiming_Implementation(bool bIsAiming)
 
 bool UCombatComponent::CanFire()
 {
-	if (EquippedWeapon == nullptr) return false;
-	if (!EquippedWeapon->IsEmpty() && bCanFire && CombatState == ECombatState::ECS_Reloading && EquippedWeapon->GetWeaponType() == EWeaponType::EWT_Shotgun) return true;
-	if (bLocallyReloading) return false;
-	return !EquippedWeapon->IsEmpty() && bCanFire && CombatState == ECombatState::ECS_Unoccupied;
-}
-
-void UCombatComponent::OnRep_CarriedAmmo()
-{
-	Controller = Controller == nullptr ? Cast<ABlasterPlayerController>(Character->Controller) : Controller;
-	if (Controller)
-	{
-		Controller->SetHUDCarriedAmmo(CarriedAmmo);
-	}
-	bool bJumpToShotgunEnd = 
-		CombatState == ECombatState::ECS_Reloading &&
-		EquippedWeapon != nullptr &&
-		EquippedWeapon->GetWeaponType() == EWeaponType::EWT_Shotgun &&
-		CarriedAmmo == 0;
-	if (bJumpToShotgunEnd)
-	{
-		JumpToShotgunEnd();
-	}
-}
-
-void UCombatComponent::InitializeCarriedAmmo()
-{
-	CarriedAmmoMap.Emplace(EWeaponType::EWT_AssaultRifle, StartingARAmmo);
-	CarriedAmmoMap.Emplace(EWeaponType::EWT_RocketLauncher, StartingRocketAmmo);
-	CarriedAmmoMap.Emplace(EWeaponType::EWT_Pistol, StartingPistolAmmo);
-	CarriedAmmoMap.Emplace(EWeaponType::EWT_SubmachineGun, StartingSMGAmmo);
-	CarriedAmmoMap.Emplace(EWeaponType::EWT_Shotgun, StartingShotgunAmmo);
-	CarriedAmmoMap.Emplace(EWeaponType::EWT_SniperRifle, StartingShotgunAmmo);
-	CarriedAmmoMap.Emplace(EWeaponType::EWT_GrenadeLauncher, StartingGrenadeLauncherAmmo);
-}
-
-void UCombatComponent::OnRep_HoldingTheFlag()
-{
-	if (bHoldingTheFlag && Character && Character->IsLocallyControlled())
-	{
-		Character->Crouch();
-	}
-}
+	if (EquippedWeapon == null

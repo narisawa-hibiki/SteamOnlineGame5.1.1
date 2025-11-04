@@ -1,6 +1,5 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
-
 #include "BlasterCharacter.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
@@ -33,29 +32,37 @@ ABlasterCharacter::ABlasterCharacter()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
+	// カメラブームの作成と設定
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(GetMesh());
 	CameraBoom->TargetArmLength = 600.f;
 	CameraBoom->bUsePawnControlRotation = true;
 
+	// フォローカメラの作成と設定
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
 
+	// キャラクターの回転設定
 	bUseControllerRotationYaw = false;
 	GetCharacterMovement()->bOrientRotationToMovement = true;
 
+	// 頭上ウィジェットの作成
 	OverheadWidget = CreateDefaultSubobject<UWidgetComponent>(TEXT("OverheadWidget"));
 	OverheadWidget->SetupAttachment(RootComponent);
 
+	// 戦闘コンポーネントの作成とレプリケーション設定
 	Combat = CreateDefaultSubobject<UCombatComponent>(TEXT("Combat"));
 	Combat->SetIsReplicated(true);
 
+	// バフコンポーネントの作成とレプリケーション設定
 	Buff = CreateDefaultSubobject<UBuffComponent>(TEXT("BuffComponent"));
 	Buff->SetIsReplicated(true);
 
+	// ラグ補償コンポーネントの作成
 	LagCompensation = CreateDefaultSubobject<ULagCompensationComponent>(TEXT("LagCompensation"));
 
+	// キャラクター移動とコリジョンの設定
 	GetCharacterMovement()->NavAgentProps.bCanCrouch = true;
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECollisionChannel::ECC_Camera, ECollisionResponse::ECR_Ignore);
 	GetMesh()->SetCollisionObjectType(ECC_SkeletalMesh);
@@ -63,20 +70,22 @@ ABlasterCharacter::ABlasterCharacter()
 	GetMesh()->SetCollisionResponseToChannel(ECollisionChannel::ECC_Visibility, ECollisionResponse::ECR_Block);
 	GetCharacterMovement()->RotationRate = FRotator(0.f, 0.f, 850.f);
 
+	// その場回転の初期化
 	TurningInPlace = ETurningInPlace::ETIP_NotTurning;
+	// ネットワーク更新頻度の設定
 	NetUpdateFrequency = 66.f;
 	MinNetUpdateFrequency = 33.f;
 
+	// ディゾルブタイムラインの作成
 	DissolveTimeline = CreateDefaultSubobject<UTimelineComponent>(TEXT("DissolveTimelineComponent"));
 
+	// アタッチされたグレネードメッシュの作成
 	AttachedGrenade = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Attached Grenade"));
 	AttachedGrenade->SetupAttachment(GetMesh(), FName("GrenadeSocket"));
 	AttachedGrenade->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
-	/**
-	* Hit boxes for server-side rewind
-	*/
-
+	// サーバーサイド巻き戻し用のヒットボックスを作成
+	// 各身体部位にヒットボックスを配置してマップに登録
 	head = CreateDefaultSubobject<UBoxComponent>(TEXT("head"));
 	head->SetupAttachment(GetMesh(), FName("head"));
 	HitCollisionBoxes.Add(FName("head"), head);
@@ -149,6 +158,7 @@ ABlasterCharacter::ABlasterCharacter()
 	foot_r->SetupAttachment(GetMesh(), FName("foot_r"));
 	HitCollisionBoxes.Add(FName("foot_r"), foot_r);
 
+	// 全ヒットボックスのコリジョン設定
 	for (auto Box : HitCollisionBoxes)
 	{
 		if (Box.Value)
@@ -165,6 +175,7 @@ void ABlasterCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
+	// オーナーのみに重なっている武器をレプリケート
 	DOREPLIFETIME_CONDITION(ABlasterCharacter, OverlappingWeapon, COND_OwnerOnly);
 	DOREPLIFETIME(ABlasterCharacter, Health);
 	DOREPLIFETIME(ABlasterCharacter, Shield);
@@ -174,13 +185,16 @@ void ABlasterCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 void ABlasterCharacter::OnRep_ReplicatedMovement()
 {
 	Super::OnRep_ReplicatedMovement();
+	// シミュレートされたプロキシの回転を更新
 	SimProxiesTurn();
 	TimeSinceLastMovementReplication = 0.f;
 }
 
 void ABlasterCharacter::Elim(bool bPlayerLeftGame)
 {
+	// 武器をドロップまたは破棄
 	DropOrDestroyWeapons();
+	// 全クライアントでエリミネーションを実行
 	MulticastElim(bPlayerLeftGame);
 }
 
@@ -193,7 +207,8 @@ void ABlasterCharacter::MulticastElim_Implementation(bool bPlayerLeftGame)
 	}
 	bElimmed = true;
 	PlayElimMontage();
-	// Start dissolve effect
+	
+	// ディゾルブエフェクトを開始
 	if (DissolveMaterialInstance)
 	{
 		DynamicDissolveMaterialInstance = UMaterialInstanceDynamic::Create(DissolveMaterialInstance, this);
@@ -203,19 +218,20 @@ void ABlasterCharacter::MulticastElim_Implementation(bool bPlayerLeftGame)
 	}
 	StartDissolve();
 
-	// Disable character movement
+	// キャラクターの移動を無効化
 	bDisableGameplay = true;
 	GetCharacterMovement()->DisableMovement();
 	if (Combat)
 	{
 		Combat->FireButtonPressed(false);
 	}
-	// Disable collision
+	
+	// コリジョンを無効化
 	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	AttachedGrenade->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
-	// Spawn elim bot
+	// エリミネーションボットエフェクトをスポーン
 	if (ElimBotEffect)
 	{
 		FVector ElimBotSpawnPoint(GetActorLocation().X, GetActorLocation().Y, GetActorLocation().Z + 200.f);
@@ -234,6 +250,8 @@ void ABlasterCharacter::MulticastElim_Implementation(bool bPlayerLeftGame)
 			GetActorLocation()
 		);
 	}
+	
+	// スナイパースコープを非表示
 	bool bHideSniperScope = IsLocallyControlled() &&
 		Combat &&
 		Combat->bAiming &&
@@ -243,10 +261,14 @@ void ABlasterCharacter::MulticastElim_Implementation(bool bPlayerLeftGame)
 	{
 		ShowSniperScopeWidget(false);
 	}
+	
+	// 王冠エフェクトを破棄
 	if (CrownComponent)
 	{
 		CrownComponent->DestroyComponent();
 	}
+	
+	// リスポーンタイマーを設定
 	GetWorldTimerManager().SetTimer(
 		ElimTimer,
 		this,
@@ -260,10 +282,12 @@ void ABlasterCharacter::ElimTimerFinished()
 	BlasterGameMode = BlasterGameMode == nullptr ? GetWorld()->GetAuthGameMode<ABlasterGameMode>() : BlasterGameMode;
 	if (BlasterGameMode && !bLeftGame)
 	{
+		// リスポーンを要求
 		BlasterGameMode->RequestRespawn(this, Controller);
 	}
 	if (bLeftGame && IsLocallyControlled())
 	{
+		// ゲーム退出デリゲートをブロードキャスト
 		OnLeftGame.Broadcast();
 	}
 }
@@ -274,6 +298,7 @@ void ABlasterCharacter::ServerLeaveGame_Implementation()
 	BlasterPlayerState = BlasterPlayerState == nullptr ? GetPlayerState<ABlasterPlayerState>() : BlasterPlayerState;
 	if (BlasterGameMode && BlasterPlayerState)
 	{
+		// ゲームモードにプレイヤー退出を通知
 		BlasterGameMode->PlayerLeftGame(BlasterPlayerState);
 	}
 }
@@ -281,6 +306,7 @@ void ABlasterCharacter::ServerLeaveGame_Implementation()
 void ABlasterCharacter::DropOrDestroyWeapon(AWeapon* Weapon)
 {
 	if (Weapon == nullptr) return;
+	// 破棄フラグに応じて武器を破棄またはドロップ
 	if (Weapon->bDestroyWeapon)
 	{
 		Weapon->Destroy();
@@ -295,14 +321,17 @@ void ABlasterCharacter::DropOrDestroyWeapons()
 {
 	if (Combat)
 	{
+		// プライマリ武器をドロップ/破棄
 		if (Combat->EquippedWeapon)
 		{
 			DropOrDestroyWeapon(Combat->EquippedWeapon);
 		}
+		// セカンダリ武器をドロップ/破棄
 		if (Combat->SecondaryWeapon)
 		{
 			DropOrDestroyWeapon(Combat->SecondaryWeapon);
 		}
+		// フラグをドロップ
 		if (Combat->TheFlag)
 		{
 			Combat->TheFlag->Dropped();
@@ -312,19 +341,26 @@ void ABlasterCharacter::DropOrDestroyWeapons()
 
 void ABlasterCharacter::OnPlayerStateInitialized()
 {
+	// スコアと敗北数を初期化
 	BlasterPlayerState->AddToScore(0.f);
 	BlasterPlayerState->AddToDefeats(0);
+	// チームカラーを設定
 	SetTeamColor(BlasterPlayerState->GetTeam());
+	// スポーン地点を設定
 	SetSpawnPoint();
 }
 
 void ABlasterCharacter::SetSpawnPoint()
 {
+	// サーバーのみ実行、チーム所属時のみ
 	if (HasAuthority() && BlasterPlayerState->GetTeam() != ETeam::ET_NoTeam)
 	{
+		// 全てのチームプレイヤースタートを取得
 		TArray<AActor*> PlayerStarts;
 		UGameplayStatics::GetAllActorsOfClass(this, ATeamPlayerStart::StaticClass(), PlayerStarts);
 		TArray<ATeamPlayerStart*> TeamPlayerStarts;
+		
+		// 自チームのスポーン地点をフィルタリング
 		for (auto Start : PlayerStarts)
 		{
 			ATeamPlayerStart* TeamStart = Cast<ATeamPlayerStart>(Start);
@@ -333,6 +369,8 @@ void ABlasterCharacter::SetSpawnPoint()
 				TeamPlayerStarts.Add(TeamStart);
 			}
 		}
+		
+		// ランダムなスポーン地点を選択
 		if (TeamPlayerStarts.Num() > 0)
 		{
 			ATeamPlayerStart* ChosenPlayerStart = TeamPlayerStarts[FMath::RandRange(0, TeamPlayerStarts.Num() - 1)];
@@ -348,6 +386,7 @@ void ABlasterCharacter::Destroyed()
 {
 	Super::Destroyed();
 
+	// エリミネーションボットコンポーネントを破棄
 	if (ElimBotComponent)
 	{
 		ElimBotComponent->DestroyComponent();
@@ -355,6 +394,7 @@ void ABlasterCharacter::Destroyed()
 
 	BlasterGameMode = BlasterGameMode == nullptr ? GetWorld()->GetAuthGameMode<ABlasterGameMode>() : BlasterGameMode;
 	bool bMatchNotInProgress = BlasterGameMode && BlasterGameMode->GetMatchState() != MatchState::InProgress;
+	// マッチ中でない場合は装備武器を破棄
 	if (Combat && Combat->EquippedWeapon && bMatchNotInProgress)
 	{
 		Combat->EquippedWeapon->Destroy();
@@ -364,6 +404,7 @@ void ABlasterCharacter::Destroyed()
 void ABlasterCharacter::MulticastGainedTheLead_Implementation()
 {
 	if (CrownSystem == nullptr) return;
+	// 王冠エフェクトをスポーンまたはアクティベート
 	if (CrownComponent == nullptr)
 	{
 		CrownComponent = UNiagaraFunctionLibrary::SpawnSystemAttached(
@@ -384,6 +425,7 @@ void ABlasterCharacter::MulticastGainedTheLead_Implementation()
 
 void ABlasterCharacter::MulticastLostTheLead_Implementation()
 {
+	// 王冠エフェクトを破棄
 	if (CrownComponent)
 	{
 		CrownComponent->DestroyComponent();
@@ -393,6 +435,7 @@ void ABlasterCharacter::MulticastLostTheLead_Implementation()
 void ABlasterCharacter::SetTeamColor(ETeam Team)
 {
 	if (GetMesh() == nullptr || OriginalMaterial == nullptr) return;
+	// チームに応じてマテリアルを設定
 	switch (Team)
 	{
 	case ETeam::ET_NoTeam:
@@ -414,10 +457,12 @@ void ABlasterCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// サーバーのみダメージデリゲートをバインド
 	if (HasAuthority())
 	{
 		OnTakeAnyDamage.AddDynamic(this, &ABlasterCharacter::ReceiveDamage);
 	}
+	// グレネードを非表示に初期化
 	if (AttachedGrenade)
 	{
 		AttachedGrenade->SetVisibility(false);
@@ -428,6 +473,7 @@ void ABlasterCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	// 毎フレーム実行する処理
 	RotateInPlace(DeltaTime);
 	HideCameraIfCharacterClose();
 	PollInit();
@@ -435,6 +481,7 @@ void ABlasterCharacter::Tick(float DeltaTime)
 
 void ABlasterCharacter::RotateInPlace(float DeltaTime)
 {
+	// フラグ保持中は移動方向に回転
 	if (Combat && Combat->bHoldingTheFlag)
 	{
 		bUseControllerRotationYaw = false;
@@ -442,20 +489,24 @@ void ABlasterCharacter::RotateInPlace(float DeltaTime)
 		TurningInPlace = ETurningInPlace::ETIP_NotTurning;
 		return;
 	}
+	// 武器装備時はコントローラー回転を使用
 	if (Combat && Combat->EquippedWeapon) GetCharacterMovement()->bOrientRotationToMovement = false;
 	if (Combat && Combat->EquippedWeapon) bUseControllerRotationYaw = true;
+	// ゲームプレイ無効時は回転しない
 	if (bDisableGameplay)
 	{
 		bUseControllerRotationYaw = false;
 		TurningInPlace = ETurningInPlace::ETIP_NotTurning;
 		return;
 	}
+	// ローカル制御時はエイムオフセットを計算
 	if (GetLocalRole() > ENetRole::ROLE_SimulatedProxy && IsLocallyControlled())
 	{
 		AimOffset(DeltaTime);
 	}
 	else
 	{
+		// リモートクライアントは定期的に移動をレプリケート
 		TimeSinceLastMovementReplication += DeltaTime;
 		if (TimeSinceLastMovementReplication > 0.25f)
 		{
@@ -465,6 +516,77 @@ void ABlasterCharacter::RotateInPlace(float DeltaTime)
 	}
 }
 
+// エイムオフセットを計算
+void ABlasterCharacter::AimOffset(float DeltaTime)
+{
+	if (Combat && Combat->EquippedWeapon == nullptr) return;
+	float Speed = CalculateSpeed();
+	bool bIsInAir = GetCharacterMovement()->IsFalling();
+
+	// 静止時、地上にいる場合
+	if (Speed == 0.f && !bIsInAir)
+	{
+		bRotateRootBone = true;
+		FRotator CurrentAimRotation = FRotator(0.f, GetBaseAimRotation().Yaw, 0.f);
+		FRotator DeltaAimRotation = UKismetMathLibrary::NormalizedDeltaRotator(CurrentAimRotation, StartingAimRotation);
+		AO_Yaw = DeltaAimRotation.Yaw;
+		if (TurningInPlace == ETurningInPlace::ETIP_NotTurning)
+		{
+			InterpAO_Yaw = AO_Yaw;
+		}
+		bUseControllerRotationYaw = true;
+		TurnInPlace(DeltaTime);
+	}
+	// 移動中または空中
+	if (Speed > 0.f || bIsInAir)
+	{
+		bRotateRootBone = false;
+		StartingAimRotation = FRotator(0.f, GetBaseAimRotation().Yaw, 0.f);
+		AO_Yaw = 0.f;
+		bUseControllerRotationYaw = true;
+		TurningInPlace = ETurningInPlace::ETIP_NotTurning;
+	}
+
+	CalculateAO_Pitch();
+}
+
+void ABlasterCharacter::Jump()
+{
+	if (Combat && Combat->bHoldingTheFlag) return;
+	if (bDisableGameplay) return;
+	if (bIsCrouched)
+	{
+		UnCrouch();
+	}
+	else
+	{
+		Super::Jump();
+	}
+}
+
+// ファイアボタン押下時の処理
+void ABlasterCharacter::FireButtonPressed()
+{
+	if (Combat && Combat->bHoldingTheFlag) return;
+	if (bDisableGameplay) return;
+	if (Combat)
+	{
+		Combat->FireButtonPressed(true);
+	}
+}
+
+// ファイアボタン離す時の処理
+void ABlasterCharacter::FireButtonReleased()
+{
+	if (Combat && Combat->bHoldingTheFlag) return;
+	if (bDisableGameplay) return;
+	if (Combat)
+	{
+		Combat->FireButtonPressed(false);
+	}
+}
+
+// プレイヤー入力の設定
 void ABlasterCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
@@ -486,6 +608,7 @@ void ABlasterCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	PlayerInputComponent->BindAction("ThrowGrenade", IE_Pressed, this, &ABlasterCharacter::GrenadeButtonPressed);
 }
 
+// コンポーネント初期化後の処理
 void ABlasterCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
@@ -512,6 +635,7 @@ void ABlasterCharacter::PostInitializeComponents()
 	}
 }
 
+// 武器発砲モンタージュの再生
 void ABlasterCharacter::PlayFireMontage(bool bAiming)
 {
 	if (Combat == nullptr || Combat->EquippedWeapon == nullptr) return;
@@ -526,6 +650,7 @@ void ABlasterCharacter::PlayFireMontage(bool bAiming)
 	}
 }
 
+// リロードモンタージュの再生
 void ABlasterCharacter::PlayReloadMontage()
 {
 	if (Combat == nullptr || Combat->EquippedWeapon == nullptr) return;
@@ -565,6 +690,7 @@ void ABlasterCharacter::PlayReloadMontage()
 	}
 }
 
+// エリミネーションモンタージュの再生
 void ABlasterCharacter::PlayElimMontage()
 {
 	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
@@ -574,6 +700,7 @@ void ABlasterCharacter::PlayElimMontage()
 	}
 }
 
+// グレネード投擲モンタージュの再生
 void ABlasterCharacter::PlayThrowGrenadeMontage()
 {
 	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
@@ -583,6 +710,7 @@ void ABlasterCharacter::PlayThrowGrenadeMontage()
 	}
 }
 
+// スワップモンタージュの再生
 void ABlasterCharacter::PlaySwapMontage()
 {
 	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
@@ -592,6 +720,7 @@ void ABlasterCharacter::PlaySwapMontage()
 	}
 }
 
+// ヒットリアクションモンタージュの再生
 void ABlasterCharacter::PlayHitReactMontage()
 {
 	if (Combat == nullptr || Combat->EquippedWeapon == nullptr) return;
@@ -605,6 +734,7 @@ void ABlasterCharacter::PlayHitReactMontage()
 	}
 }
 
+// グレネードボタン押下時の処理
 void ABlasterCharacter::GrenadeButtonPressed()
 {
 	if (Combat)
@@ -614,13 +744,16 @@ void ABlasterCharacter::GrenadeButtonPressed()
 	}
 }
 
+// ダメージ受け取り処理
 void ABlasterCharacter::ReceiveDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType, AController* InstigatorController, AActor* DamageCauser)
 {
 	BlasterGameMode = BlasterGameMode == nullptr ? GetWorld()->GetAuthGameMode<ABlasterGameMode>() : BlasterGameMode;
 	if (bElimmed || BlasterGameMode == nullptr) return;
+	// ダメージをゲームモードで計算（チームダメージ無効化など）
 	Damage = BlasterGameMode->CalculateDamage(InstigatorController, Controller, Damage);
 
 	float DamageToHealth = Damage;
+	// シールドから先にダメージを受ける
 	if (Shield > 0.f)
 	{
 		if (Shield >= Damage)
@@ -635,12 +768,14 @@ void ABlasterCharacter::ReceiveDamage(AActor* DamagedActor, float Damage, const 
 		}
 	}
 
+	// 体力にダメージを適用
 	Health = FMath::Clamp(Health - DamageToHealth, 0.f, MaxHealth);
 
 	UpdateHUDHealth();
 	UpdateHUDShield();
 	PlayHitReactMontage();
 
+	// 体力が0になったらエリミネート
 	if (Health == 0.f)
 	{
 		if (BlasterGameMode)
@@ -652,6 +787,7 @@ void ABlasterCharacter::ReceiveDamage(AActor* DamagedActor, float Damage, const 
 	}
 }
 
+// 前進入力処理
 void ABlasterCharacter::MoveForward(float Value)
 {
 	if (bDisableGameplay) return;
@@ -663,6 +799,7 @@ void ABlasterCharacter::MoveForward(float Value)
 	}
 }
 
+// 横移動入力処理
 void ABlasterCharacter::MoveRight(float Value)
 {
 	if (bDisableGameplay) return;
@@ -674,16 +811,19 @@ void ABlasterCharacter::MoveRight(float Value)
 	}
 }
 
+// ヨー方向の回転処理
 void ABlasterCharacter::Turn(float Value)
 {
 	AddControllerYawInput(Value);
 }
 
+// ピッチ方向の回転処理
 void ABlasterCharacter::LookUp(float Value)
 {
 	AddControllerPitchInput(Value);
 }
 
+// 装備ボタン押下時の処理
 void ABlasterCharacter::EquipButtonPressed()
 {
 	if (bDisableGameplay) return;
@@ -705,6 +845,7 @@ void ABlasterCharacter::EquipButtonPressed()
 	}
 }
 
+// サーバー側装備処理
 void ABlasterCharacter::ServerEquipButtonPressed_Implementation()
 {
 	if (Combat)
@@ -720,6 +861,7 @@ void ABlasterCharacter::ServerEquipButtonPressed_Implementation()
 	}
 }
 
+// しゃがみボタン押下時の処理
 void ABlasterCharacter::CrouchButtonPressed()
 {
 	if (Combat && Combat->bHoldingTheFlag) return;
@@ -734,6 +876,7 @@ void ABlasterCharacter::CrouchButtonPressed()
 	}
 }
 
+// リロードボタン押下時の処理
 void ABlasterCharacter::ReloadButtonPressed()
 {
 	if (Combat && Combat->bHoldingTheFlag) return;
@@ -744,6 +887,7 @@ void ABlasterCharacter::ReloadButtonPressed()
 	}
 }
 
+// エイムボタン押下時の処理
 void ABlasterCharacter::AimButtonPressed()
 {
 	if (Combat && Combat->bHoldingTheFlag) return;
@@ -754,6 +898,7 @@ void ABlasterCharacter::AimButtonPressed()
 	}
 }
 
+// エイムボタン離す時の処理
 void ABlasterCharacter::AimButtonReleased()
 {
 	if (Combat && Combat->bHoldingTheFlag) return;
@@ -764,6 +909,7 @@ void ABlasterCharacter::AimButtonReleased()
 	}
 }
 
+// 移動速度計算
 float ABlasterCharacter::CalculateSpeed()
 {
 	FVector Velocity = GetVelocity();
@@ -771,49 +917,7 @@ float ABlasterCharacter::CalculateSpeed()
 	return Velocity.Size();
 }
 
-void ABlasterCharacter::AimOffset(float DeltaTime)
-{
-	if (Combat && Combat->EquippedWeapon == nullptr) return;
-	float Speed = CalculateSpeed();
-	bool bIsInAir = GetCharacterMovement()->IsFalling();
-
-	if (Speed == 0.f && !bIsInAir) // standing still, not jumping
-	{
-		bRotateRootBone = true;
-		FRotator CurrentAimRotation = FRotator(0.f, GetBaseAimRotation().Yaw, 0.f);
-		FRotator DeltaAimRotation = UKismetMathLibrary::NormalizedDeltaRotator(CurrentAimRotation, StartingAimRotation);
-		AO_Yaw = DeltaAimRotation.Yaw;
-		if (TurningInPlace == ETurningInPlace::ETIP_NotTurning)
-		{
-			InterpAO_Yaw = AO_Yaw;
-		}
-		bUseControllerRotationYaw = true;
-		TurnInPlace(DeltaTime);
-	}
-	if (Speed > 0.f || bIsInAir) // running, or jumping
-	{
-		bRotateRootBone = false;
-		StartingAimRotation = FRotator(0.f, GetBaseAimRotation().Yaw, 0.f);
-		AO_Yaw = 0.f;
-		bUseControllerRotationYaw = true;
-		TurningInPlace = ETurningInPlace::ETIP_NotTurning;
-	}
-
-	CalculateAO_Pitch();
-}
-
-void ABlasterCharacter::CalculateAO_Pitch()
-{
-	AO_Pitch = GetBaseAimRotation().Pitch;
-	if (AO_Pitch > 90.f && !IsLocallyControlled())
-	{
-		// map pitch from [270, 360) to [-90, 0)
-		FVector2D InRange(270.f, 360.f);
-		FVector2D OutRange(-90.f, 0.f);
-		AO_Pitch = FMath::GetMappedRangeValueClamped(InRange, OutRange, AO_Pitch);
-	}
-}
-
+// プロキシの回転補間処理
 void ABlasterCharacter::SimProxiesTurn()
 {
 	if (Combat == nullptr || Combat->EquippedWeapon == nullptr) return;
@@ -849,182 +953,7 @@ void ABlasterCharacter::SimProxiesTurn()
 
 }
 
-void ABlasterCharacter::Jump()
-{
-	if (Combat && Combat->bHoldingTheFlag) return;
-	if (bDisableGameplay) return;
-	if (bIsCrouched)
-	{
-		UnCrouch();
-	}
-	else
-	{
-		Super::Jump();
-	}
-}
-
-void ABlasterCharacter::FireButtonPressed()
-{
-	if (Combat && Combat->bHoldingTheFlag) return;
-	if (bDisableGameplay) return;
-	if (Combat)
-	{
-		Combat->FireButtonPressed(true);
-	}
-}
-
-void ABlasterCharacter::FireButtonReleased()
-{
-	if (Combat && Combat->bHoldingTheFlag) return;
-	if (bDisableGameplay) return;
-	if (Combat)
-	{
-		Combat->FireButtonPressed(false);
-	}
-}
-
-void ABlasterCharacter::TurnInPlace(float DeltaTime)
-{
-	if (AO_Yaw > 90.f)
-	{
-		TurningInPlace = ETurningInPlace::ETIP_Right;
-	}
-	else if (AO_Yaw < -90.f)
-	{
-		TurningInPlace = ETurningInPlace::ETIP_Left;
-	}
-	if (TurningInPlace != ETurningInPlace::ETIP_NotTurning)
-	{
-		InterpAO_Yaw = FMath::FInterpTo(InterpAO_Yaw, 0.f, DeltaTime, 4.f);
-		AO_Yaw = InterpAO_Yaw;
-		if (FMath::Abs(AO_Yaw) < 15.f)
-		{
-			TurningInPlace = ETurningInPlace::ETIP_NotTurning;
-			StartingAimRotation = FRotator(0.f, GetBaseAimRotation().Yaw, 0.f);
-		}
-	}
-}
-
-void ABlasterCharacter::HideCameraIfCharacterClose()
-{
-	if (!IsLocallyControlled()) return;
-	if ((FollowCamera->GetComponentLocation() - GetActorLocation()).Size() < CameraThreshold)
-	{
-		GetMesh()->SetVisibility(false);
-		if (Combat && Combat->EquippedWeapon && Combat->EquippedWeapon->GetWeaponMesh())
-		{
-			Combat->EquippedWeapon->GetWeaponMesh()->bOwnerNoSee = true;
-		}
-		if (Combat && Combat->SecondaryWeapon && Combat->SecondaryWeapon->GetWeaponMesh())
-		{
-			Combat->SecondaryWeapon->GetWeaponMesh()->bOwnerNoSee = true;
-		}
-	}
-	else
-	{
-		GetMesh()->SetVisibility(true);
-		if (Combat && Combat->EquippedWeapon && Combat->EquippedWeapon->GetWeaponMesh())
-		{
-			Combat->EquippedWeapon->GetWeaponMesh()->bOwnerNoSee = false;
-		}
-		if (Combat && Combat->SecondaryWeapon && Combat->SecondaryWeapon->GetWeaponMesh())
-		{
-			Combat->SecondaryWeapon->GetWeaponMesh()->bOwnerNoSee = false;
-		}
-	}
-}
-
-void ABlasterCharacter::OnRep_Health(float LastHealth)
-{
-	UpdateHUDHealth();
-	if (Health < LastHealth)
-	{
-		PlayHitReactMontage();
-	}
-}
-
-void ABlasterCharacter::OnRep_Shield(float LastShield)
-{
-	UpdateHUDShield();
-	if (Shield < LastShield)
-	{
-		PlayHitReactMontage();
-	}
-}
-
-void ABlasterCharacter::UpdateHUDHealth()
-{
-	BlasterPlayerController = BlasterPlayerController == nullptr ? Cast<ABlasterPlayerController>(Controller) : BlasterPlayerController;
-	if (BlasterPlayerController)
-	{
-		BlasterPlayerController->SetHUDHealth(Health, MaxHealth);
-	}
-}
-
-void ABlasterCharacter::UpdateHUDShield()
-{
-	BlasterPlayerController = BlasterPlayerController == nullptr ? Cast<ABlasterPlayerController>(Controller) : BlasterPlayerController;
-	if (BlasterPlayerController)
-	{
-		BlasterPlayerController->SetHUDShield(Shield, MaxShield);
-	}
-}
-
-void ABlasterCharacter::UpdateHUDAmmo()
-{
-	BlasterPlayerController = BlasterPlayerController == nullptr ? Cast<ABlasterPlayerController>(Controller) : BlasterPlayerController;
-	if (BlasterPlayerController && Combat && Combat->EquippedWeapon)
-	{
-		BlasterPlayerController->SetHUDCarriedAmmo(Combat->CarriedAmmo);
-		BlasterPlayerController->SetHUDWeaponAmmo(Combat->EquippedWeapon->GetAmmo());
-	}
-}
-
-void ABlasterCharacter::SpawDefaultWeapon()
-{
-	BlasterGameMode = BlasterGameMode == nullptr ? GetWorld()->GetAuthGameMode<ABlasterGameMode>() : BlasterGameMode;
-	UWorld* World = GetWorld();
-	if (BlasterGameMode && World && !bElimmed && DefaultWeaponClass)
-	{
-		AWeapon* StartingWeapon = World->SpawnActor<AWeapon>(DefaultWeaponClass);
-		StartingWeapon->bDestroyWeapon = true;
-		if (Combat)
-		{
-			Combat->EquipWeapon(StartingWeapon);
-		}
-	}
-}
-
-void ABlasterCharacter::PollInit()
-{
-	if (BlasterPlayerState == nullptr)
-	{
-		BlasterPlayerState = GetPlayerState<ABlasterPlayerState>();
-		if (BlasterPlayerState)
-		{
-			OnPlayerStateInitialized();
-
-			ABlasterGameState* BlasterGameState = Cast<ABlasterGameState>(UGameplayStatics::GetGameState(this));
-
-			if (BlasterGameState && BlasterGameState->TopScoringPlayers.Contains(BlasterPlayerState))
-			{
-				MulticastGainedTheLead();
-			}
-		}
-	}
-	if (BlasterPlayerController == nullptr)
-	{
-		BlasterPlayerController = BlasterPlayerController == nullptr ? Cast<ABlasterPlayerController>(Controller) : BlasterPlayerController;
-		if (BlasterPlayerController)
-		{
-			SpawDefaultWeapon();
-			UpdateHUDAmmo();
-			UpdateHUDHealth();
-			UpdateHUDShield();
-		}
-	}
-}
-
+// ヒット時のディゾルブマテリアル更新
 void ABlasterCharacter::UpdateDissolveMaterial(float DissolveValue)
 {
 	if (DynamicDissolveMaterialInstance)
@@ -1033,6 +962,7 @@ void ABlasterCharacter::UpdateDissolveMaterial(float DissolveValue)
 	}
 }
 
+// ディゾルブエフェクト開始
 void ABlasterCharacter::StartDissolve()
 {
 	DissolveTrack.BindDynamic(this, &ABlasterCharacter::UpdateDissolveMaterial);
@@ -1043,6 +973,7 @@ void ABlasterCharacter::StartDissolve()
 	}
 }
 
+// オーバーラッピング武器のセット
 void ABlasterCharacter::SetOverlappingWeapon(AWeapon* Weapon)
 {
 	if (OverlappingWeapon)
@@ -1059,6 +990,7 @@ void ABlasterCharacter::SetOverlappingWeapon(AWeapon* Weapon)
 	}
 }
 
+// オーバーラッピング武器のレプリケーション処理
 void ABlasterCharacter::OnRep_OverlappingWeapon(AWeapon* LastWeapon)
 {
 	if (OverlappingWeapon)
@@ -1071,46 +1003,54 @@ void ABlasterCharacter::OnRep_OverlappingWeapon(AWeapon* LastWeapon)
 	}
 }
 
+// 武器が装備されているか確認
 bool ABlasterCharacter::IsWeaponEquipped()
 {
 	return (Combat && Combat->EquippedWeapon);
 }
 
+// エイミング中か確認
 bool ABlasterCharacter::IsAiming()
 {
 	return (Combat && Combat->bAiming);
 }
 
+// 装備中の武器取得
 AWeapon* ABlasterCharacter::GetEquippedWeapon()
 {
 	if (Combat == nullptr) return nullptr;
 	return Combat->EquippedWeapon;
 }
 
+// ヒットターゲット取得
 FVector ABlasterCharacter::GetHitTarget() const
 {
 	if (Combat == nullptr) return FVector();
 	return Combat->HitTarget;
 }
 
+// 戦闘状態取得
 ECombatState ABlasterCharacter::GetCombatState() const
 {
 	if (Combat == nullptr) return ECombatState::ECS_MAX;
 	return Combat->CombatState;
 }
 
+// ローカルリロード中か確認
 bool ABlasterCharacter::IsLocallyReloading()
 {
 	if (Combat == nullptr) return false;
 	return Combat->bLocallyReloading;
 }
 
+// フラグを保持しているか確認
 bool ABlasterCharacter::IsHoldingTheFlag() const
 {
 	if (Combat == nullptr) return false;
 	return Combat->bHoldingTheFlag;
 }
 
+// チーム取得
 ETeam ABlasterCharacter::GetTeam()
 {
 	BlasterPlayerState = BlasterPlayerState == nullptr ? GetPlayerState<ABlasterPlayerState>() : BlasterPlayerState;
@@ -1118,6 +1058,7 @@ ETeam ABlasterCharacter::GetTeam()
 	return BlasterPlayerState->GetTeam();
 }
 
+// フラグ保持状態の設定
 void ABlasterCharacter::SetHoldingTheFlag(bool bHolding)
 {
 	if (Combat == nullptr) return;
